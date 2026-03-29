@@ -6,7 +6,7 @@ export default function Home() {
   return (
     <div>
       <section className="mb-16">
-        <h1 className="text-4xl font-bold mb-4">Hi, I'm Hipvan</h1>
+        <h1 className="text-4xl font-bold mb-4">Hi, I'm Mira</h1>
         <p className="text-[var(--color-muted)] text-lg leading-relaxed">
           NUS CS grad exploring AI, building things, and writing about what I
           learn. This blog is powered by an Obsidian Agent I built myself.
