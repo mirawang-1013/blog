@@ -1,7 +1,7 @@
 ---
 title: "Dropout: The Bug That Taught Me How It Actually Works"
 date: "2026-04-09"
-summary: "I added dropout to a VGG network and got worse results. Turns out I forgot net.eval() — here's what I learned about dropout, train/eval modes, and why this mistake is so common."
+summary: "I added dropout (p=0.5) to a VGG network and hit two lessons: first, forgetting net.eval() silently breaks your test accuracy; second, dropout isn't a free lunch — it needs the right hyperparameters and enough training time to pay off."
 tags: ["deep-learning", "pytorch", "CS5242"]
 ---
 
@@ -18,14 +18,14 @@ self.dropout = nn.Dropout(0.5)
 # in forward
 x = self.linear1(x)
 x = torch.relu(x)
-x = self.dropout(x)    # dropout after FC1
+x = self.dropout(x)    # dropout after FC1, p=0.5
 x = self.linear2(x)
 x = torch.relu(x)
-x = self.dropout(x)    # dropout after FC2
+x = self.dropout(x)    # dropout after FC2, p=0.5
 x = self.linear3(x)
 ```
 
-Trained it, and... the results were **worse**. About **20.9% test error** — a full percentage point behind the baseline. That didn't make sense.
+Trained it, and... the results were **worse**. About **20.9% test error** — a full percentage point behind the baseline. That sent me down two rabbit holes.
 
 ## The bug
 
@@ -74,23 +74,49 @@ If you forget to switch modes, you're evaluating with a crippled network — ran
 
 ## The results
 
-Here's the epoch-by-epoch comparison (test error rate):
+Here's the epoch-by-epoch comparison. Dropout rate = 0.5, applied after FC1 and FC2.
 
-| Epoch | No Dropout | With Dropout (buggy) | With Dropout (fixed) |
-|-------|-----------|----------------------|----------------------|
-| 1     | 90.11%    | 90.04%               | 90.04%               |
-| 5     | 60.42%    | 51.83%               | 51.83%               |
-| 10    | 22.74%    | 24.69%               | ~22%                 |
-| 14    | 20.13%    | 21.48%               | ~19%                 |
-| 19    | 19.81%    | 20.87%               | ~19%                 |
+**Test error rate:**
+
+| Epoch | LR     | No Dropout | Dropout (p=0.5) |
+|-------|--------|-----------|-----------------|
+| 1     | 0.25   | 90.11%    | 90.04%          |
+| 2     | 0.25   | 81.14%    | 88.36%          |
+| 3     | 0.25   | 76.55%    | 69.55%          |
+| 4     | 0.25   | 62.37%    | 60.09%          |
+| 5     | 0.25   | 60.42%    | 51.83%          |
+| 6     | 0.25   | 46.46%    | 43.41%          |
+| 7     | 0.25   | 35.89%    | 36.43%          |
+| 8     | 0.25   | 32.73%    | 32.85%          |
+| 9     | 0.25   | 27.69%    | 27.17%          |
+| 10    | 0.125  | 22.74%    | 24.69%          |
+| 11    | 0.125  | 23.37%    | 23.85%          |
+| 12    | 0.125  | 23.67%    | 23.81%          |
+| 13    | 0.125  | 22.51%    | 23.85%          |
+| 14    | 0.0625 | 20.13%    | 21.48%          |
+| 15    | 0.0625 | 20.37%    | 21.23%          |
+| 16    | 0.0625 | 19.99%    | 20.91%          |
+| 17    | 0.0625 | 19.93%    | 20.85%          |
+| 18    | 0.03125| 19.80%    | 20.85%          |
+| 19    | 0.03125| 19.81%    | 20.87%          |
+
+**Training error rate:**
+
+| Epoch | No Dropout | Dropout (p=0.5) |
+|-------|-----------|-----------------|
+| 1     | 90.16%    | 89.97%          |
+| 5     | 57.25%    | 57.89%          |
+| 10    | 16.26%    | 14.84%          |
+| 14    | 1.55%     | 0.98%           |
+| 17    | 0.01%     | 0.00%           |
+| 19    | 0.00%     | 0.00%           |
 
 Key observations:
 
-1. **Training error with dropout is higher** — that's expected and correct. Dropout makes training harder on purpose.
-2. **Buggy dropout has worse test error** than no dropout — because dropout is still active during testing, you're only using half the network.
-3. **Fixed dropout should match or beat** the no-dropout baseline, especially in the later epochs where overfitting starts to matter.
-
-Notice that even in the buggy version, dropout helps in early epochs (epoch 5: 51.83% vs 60.42%). That's because the regularization effect is strong enough to overcome the evaluation penalty early on. But as the network gets more precise in later epochs, the noise from testing with dropout becomes the bottleneck.
+1. **Dropout helps in the early-to-mid epochs** (epochs 3-6). The test error with dropout is consistently lower — 69.55% vs 76.55% at epoch 3, 51.83% vs 60.42% at epoch 5. The regularization effect is strongest here.
+2. **The gap closes and reverses in later epochs.** After epoch 10, the no-dropout model pulls ahead. Final result: 19.81% (no dropout) vs 20.87% (dropout) — about 1% worse.
+3. **Training error is similar between the two.** Both reach 0% training error by epoch 17-18, so dropout at p=0.5 isn't preventing the network from fitting the training data — it's just not translating into better generalization for this setup.
+4. **Dropout isn't a free lunch.** With only 19 epochs, the dropout model may not have had enough time to converge. Dropout typically needs longer training since it effectively makes the optimization landscape noisier. The model might also benefit from a lower dropout rate (e.g., p=0.2 or p=0.3) or additional techniques like data augmentation to see a clear win.
 
 ## The broader lesson: `train()` vs `eval()` in PyTorch
 
@@ -104,4 +130,7 @@ It's two lines. Forgetting them can silently corrupt your results — no error, 
 
 ## Takeaway
 
-Before you question whether a technique "works," make sure you've implemented it correctly. My first instinct was "dropout doesn't help for this model" — but the real answer was a two-line bug. In deep learning, silent bugs are the most dangerous kind.
+Two lessons from one experiment:
+
+1. **Always check `train()` / `eval()` first.** Before questioning whether a technique works, make sure you've implemented it correctly. Forgetting `net.eval()` is a silent bug — no error, no warning, just worse numbers.
+2. **Dropout isn't magic.** Even with the correct implementation, dropout (p=0.5) didn't beat the baseline here. Regularization techniques need the right hyperparameters — a lower dropout rate, more training epochs, or pairing with data augmentation might tell a different story. The point of dropout is to reduce the gap between train and test error, but if the model isn't overfitting much to begin with, dropout might just slow down convergence without a clear payoff.
